@@ -4,6 +4,9 @@ import pandas as pd
 from datetime import datetime
 import os
 
+export POKEMON_API_KEY="pokeprice_free_b3fea189114d4842fda203435777293bf3f4154baea47f46"
+
+
 # 페이지 설정
 st.set_page_config(
     page_title="포켓몬 카드 가격 검색",
