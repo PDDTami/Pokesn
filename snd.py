@@ -23,9 +23,9 @@ def get_json(url: str, params: Optional[Dict[str, Any]] = None) -> Any:
 
 
 # -----------------------------
-# 1) SNKRDUNK API - 포켓몬 카드 전용 검색
+# 1) SNKRDUNK API - 포켓몬 싱글 카드 전용 검색
 # -----------------------------
-def search_pokemon_cards(
+def search_pokemon_single_cards(
     character_name: str = "",
     set_name: str = "",
     card_number: str = "",
@@ -33,8 +33,7 @@ def search_pokemon_cards(
     per_page: int = 20
 ) -> Dict[str, Any]:
     """
-    포켓몬 카드만 검색 (brandId=pokemon 사용)
-    캐릭터명, 세트명, 카드번호로 검색
+    포켓몬 싱글 카드만 검색 (부스터 박스/팩 제외)
     """
     
     # 검색 키워드 조합
@@ -55,60 +54,63 @@ def search_pokemon_cards(
             "data": None
         }
     
-    # 포켓몬 전용 API 엔드포인트 시도
+    # 포켓몬 싱글 카드 전용 엔드포인트 시도
     attempts = [
-        # 시도 1: brands/pokemon 경로 사용
+        # 시도 1: 싱글 카드 카테고리 ID (13 = Single Cards)
+        {
+            "url": "https://snkrdunk.com/en/v1/trading-cards",
+            "params": {
+                "tradingCardCategoryId": "13",  # Single Cards
+                "keyword": keyword,
+                "page": page,
+                "perPage": per_page,
+                "sortType": "popular"
+            }
+        },
+        # 시도 2: categoryId + brandId
+        {
+            "url": "https://snkrdunk.com/en/v1/trading-cards",
+            "params": {
+                "tradingCardCategoryId": "13",
+                "brandId": "pokemon",
+                "keyword": keyword,
+                "page": page,
+                "perPage": per_page
+            }
+        },
+        # 시도 3: brands 경로 + 싱글 카드 필터
         {
             "url": "https://snkrdunk.com/en/v1/brands/pokemon/trading-cards",
             "params": {
+                "tradingCardCategoryId": "13",
                 "keyword": keyword,
+                "page": page,
+                "perPage": per_page
+            }
+        },
+        # 시도 4: isBox=false 플래그
+        {
+            "url": "https://snkrdunk.com/en/v1/trading-cards",
+            "params": {
+                "keyword": f"Pokemon {keyword}",
+                "isBox": "false",
                 "page": page,
                 "perPage": per_page,
                 "sortType": "popular"
             }
         },
-        # 시도 2: brandId 파라미터 사용
+        # 시도 5: productType=single
         {
             "url": "https://snkrdunk.com/en/v1/trading-cards",
             "params": {
+                "keyword": keyword,
+                "productType": "single",
                 "brandId": "pokemon",
-                "keyword": keyword,
-                "page": page,
-                "perPage": per_page,
-                "sortType": "popular"
-            }
-        },
-        # 시도 3: brand 파라미터
-        {
-            "url": "https://snkrdunk.com/en/v1/trading-cards",
-            "params": {
-                "brand": "pokemon",
-                "keyword": keyword,
                 "page": page,
                 "perPage": per_page
             }
         },
-        # 시도 4: categoryId 25 (포켓몬 카테고리로 추정)
-        {
-            "url": "https://snkrdunk.com/en/v1/trading-cards",
-            "params": {
-                "categoryId": "25",
-                "keyword": keyword,
-                "page": page,
-                "perPage": per_page
-            }
-        },
-        # 시도 5: q 파라미터 + brandId
-        {
-            "url": "https://snkrdunk.com/en/v1/trading-cards",
-            "params": {
-                "brandId": "pokemon",
-                "q": keyword,
-                "page": page,
-                "perPage": per_page
-            }
-        },
-        # 시도 6: 검색어에 Pokemon 추가
+        # 시도 6: 기본 검색 + 필터링
         {
             "url": "https://snkrdunk.com/en/v1/trading-cards",
             "params": {
@@ -116,16 +118,6 @@ def search_pokemon_cards(
                 "page": page,
                 "perPage": per_page,
                 "sortType": "popular"
-            }
-        },
-        # 시도 7: name 파라미터 + brandId
-        {
-            "url": "https://snkrdunk.com/en/v1/trading-cards",
-            "params": {
-                "brandId": "pokemon",
-                "name": keyword,
-                "page": page,
-                "perPage": per_page
             }
         },
     ]
@@ -142,29 +134,27 @@ def search_pokemon_cards(
             # 결과가 있는지 확인
             items = extract_cards_from_response(result)
             
-            # 포켓몬 카드만 필터링
-            pokemon_items = filter_pokemon_only(items)
+            # 싱글 카드만 필터링 (박스/팩 제외)
+            single_cards = filter_single_cards_only(items)
             
-            if pokemon_items:  # 포켓몬 카드가 있으면 성공
+            if single_cards:  # 싱글 카드가 있으면 성공
                 return {
                     "success": True,
                     "data": result,
-                    "filtered_items": pokemon_items,
+                    "filtered_items": single_cards,
                     "endpoint": attempt["url"],
                     "params": cleaned_params,
                     "attempt_number": idx,
-                    "items_count": len(pokemon_items),
+                    "items_count": len(single_cards),
                     "original_count": len(items)
                 }
             else:
-                # 결과는 받았지만 포켓몬 카드가 없음
                 errors.append({
                     "attempt": idx,
                     "url": attempt["url"],
                     "params": cleaned_params,
-                    "status": "no_pokemon_items",
-                    "total_items": len(items),
-                    "response_keys": list(result.keys()) if isinstance(result, dict) else None
+                    "status": "no_single_cards",
+                    "total_items": len(items)
                 })
                 
         except Exception as e:
@@ -183,60 +173,46 @@ def search_pokemon_cards(
     }
 
 
-def filter_pokemon_only(cards: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def filter_single_cards_only(cards: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    포켓몬 카드만 필터링 (원피스, 유희왕 등 제외)
+    싱글 카드만 필터링 (부스터 박스, 팩, 박스 제외)
     """
     if not cards:
         return []
     
-    # 원피스 관련 키워드 (제외할 것들)
+    # 제외할 키워드 (박스/팩 관련)
     exclude_keywords = [
-        "one piece", "onepiece", "ワンピース", 
-        "luffy", "zoro", "nami", "sanji", "chopper",
-        "monkey d", "roronoa", "god's island",
-        "romance dawn", "paramount war", "nico robin",
+        "booster box", "booster pack", "box", "pack",
+        "elite trainer", "collection box", "special box",
+        "deck build", "trainer box", "set", "bundle",
+        "ブースター", "ボックス", "パック", "BOX",
+        # 원피스 등 다른 TCG
+        "one piece", "onepiece", "ワンピース",
         "yu-gi-oh", "yugioh", "遊戯王",
-        "magic the gathering", "mtg",
-        "digimon", "デジモン"
-    ]
-    
-    # 포켓몬 관련 키워드 (확실한 것만 포함)
-    pokemon_keywords = [
-        "pokemon", "pokémon", "ポケモン", "ポケカ",
-        "pikachu", "charizard", "eevee", "mewtwo",
-        "scarlet", "violet", "sword", "shield",
-        "vmax", "vstar", "ex", "gx", "trainer"
+        "magic the gathering", "mtg"
     ]
     
     filtered = []
     
     for card in cards:
-        # 카드 전체 텍스트를 JSON으로 변환하여 검색
+        # 카드 이름과 전체 정보를 JSON으로 변환
         card_text = json.dumps(card, ensure_ascii=False).lower()
+        card_name = card.get("name", "").lower()
         
         # 제외 키워드가 있으면 스킵
-        has_exclude = any(keyword in card_text for keyword in exclude_keywords)
+        has_exclude = any(keyword in card_text or keyword in card_name for keyword in exclude_keywords)
         if has_exclude:
             continue
         
-        # 포켓몬 키워드가 있으면 포함
-        has_pokemon = any(keyword in card_text for keyword in pokemon_keywords)
+        # 카테고리 정보 확인
+        category = card.get("tradingCardCategory", {})
+        if isinstance(category, dict):
+            category_name = category.get("name", "").lower()
+            # "Box & Packs" 카테고리면 제외
+            if "box" in category_name or "pack" in category_name:
+                continue
         
-        # 브랜드나 카테고리 정보 확인
-        brand_info = card.get("brand", {})
-        if isinstance(brand_info, dict):
-            brand_name = brand_info.get("name", "").lower()
-            if "pokemon" in brand_name or "pokémon" in brand_name:
-                has_pokemon = True
-        
-        # 세트명 확인
-        set_name = card.get("setName", "").lower()
-        if "pokemon" in set_name or "pokémon" in set_name:
-            has_pokemon = True
-        
-        if has_pokemon:
-            filtered.append(card)
+        filtered.append(card)
     
     return filtered
 
@@ -244,7 +220,7 @@ def filter_pokemon_only(cards: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # -----------------------------
 # 2) SNKRDUNK API - 기존 확정된 엔드포인트
 # -----------------------------
-def get_used_listings(card_id: str, per_page: int = 16, page: int = 1) -> Any:
+def get_used_listings(card_id: str, per_page: int = 50, page: int = 1) -> Any:
     """
     카드ID 기준으로 used-listings(중고 리스팅/가격 관련) JSON을 가져온다.
     """
@@ -288,8 +264,6 @@ def extract_cards_from_response(response_data: Any) -> List[Dict[str, Any]]:
     if not response_data:
         return []
     
-    cards = []
-    
     # 다양한 응답 구조 처리
     if isinstance(response_data, dict):
         # 패턴 1: 최상위 레벨에 리스트
@@ -318,7 +292,7 @@ def extract_cards_from_response(response_data: Any) -> List[Dict[str, Any]]:
     elif isinstance(response_data, list):
         return response_data
     
-    return cards
+    return []
 
 
 def extract_card_id(card_item: Dict[str, Any]) -> Optional[str]:
@@ -339,61 +313,155 @@ def extract_card_id(card_item: Dict[str, Any]) -> Optional[str]:
 
 
 # -----------------------------
-# 4) 가격 정보 추출
+# 4) 가격 정보 추출 (개선됨)
 # -----------------------------
-def extract_price_info(data: Any) -> Dict[str, Any]:
+def extract_listings_info(data: Any) -> Dict[str, Any]:
     """
-    JSON에서 가격 정보 추출
+    used-listings JSON에서 실제 매물 정보 추출
     """
-    price_info = {
-        "lowest_price": None,
-        "highest_price": None,
-        "average_price": None,
-        "all_prices": []
+    listings_info = {
+        "listings": [],
+        "has_data": False,
+        "total_count": 0
     }
     
-    def walk(obj):
-        if isinstance(obj, dict):
-            for key, value in obj.items():
-                key_lower = key.lower()
-                if any(price_key in key_lower for price_key in ["price", "amount", "value"]):
-                    if isinstance(value, (int, float)) and value > 0:
-                        price_info["all_prices"].append(float(value))
-                    elif isinstance(value, str):
-                        try:
-                            price_val = float(value.replace(",", "").replace("¥", "").replace("$", ""))
-                            if price_val > 0:
-                                price_info["all_prices"].append(price_val)
-                        except:
-                            pass
-            
-            for value in obj.values():
-                walk(value)
+    if not data:
+        return listings_info
+    
+    # 리스팅 데이터 찾기
+    listings = []
+    
+    if isinstance(data, dict):
+        # 패턴 1: items, list, data 등
+        for key in ["items", "list", "data", "usedListings", "listings"]:
+            if key in data and isinstance(data[key], list):
+                listings = data[key]
+                break
         
-        elif isinstance(obj, list):
-            for item in obj:
-                walk(item)
+        # 패턴 2: data.items
+        if not listings and "data" in data:
+            inner_data = data["data"]
+            if isinstance(inner_data, list):
+                listings = inner_data
+            elif isinstance(inner_data, dict):
+                for key in ["items", "list", "usedListings"]:
+                    if key in inner_data and isinstance(inner_data[key], list):
+                        listings = inner_data[key]
+                        break
     
-    walk(data)
+    elif isinstance(data, list):
+        listings = data
     
-    if price_info["all_prices"]:
-        price_info["lowest_price"] = min(price_info["all_prices"])
-        price_info["highest_price"] = max(price_info["all_prices"])
-        price_info["average_price"] = sum(price_info["all_prices"]) / len(price_info["all_prices"])
+    # 리스팅이 없으면 반환
+    if not listings:
+        return listings_info
     
-    return price_info
+    # 각 리스팅에서 가격 정보 추출
+    for listing in listings:
+        if not isinstance(listing, dict):
+            continue
+        
+        listing_data = {
+            "price": None,
+            "condition": None,
+            "seller": None,
+            "created_at": None,
+            "is_on_sale": False
+        }
+        
+        # 가격 찾기
+        for price_key in ["price", "salePrice", "amount", "value", "sellPrice"]:
+            if price_key in listing:
+                try:
+                    listing_data["price"] = float(listing[price_key])
+                    break
+                except (ValueError, TypeError):
+                    pass
+        
+        # 컨디션
+        for cond_key in ["condition", "grade", "quality", "tier"]:
+            if cond_key in listing:
+                listing_data["condition"] = str(listing[cond_key])
+                break
+        
+        # 판매자
+        if "seller" in listing:
+            seller = listing["seller"]
+            if isinstance(seller, dict):
+                listing_data["seller"] = seller.get("name") or seller.get("username")
+            else:
+                listing_data["seller"] = str(seller)
+        
+        # 생성일
+        for date_key in ["createdAt", "created_at", "listedAt", "date"]:
+            if date_key in listing:
+                listing_data["created_at"] = str(listing[date_key])
+                break
+        
+        # 판매 중 여부
+        for sale_key in ["isOnSale", "is_on_sale", "available", "inStock"]:
+            if sale_key in listing:
+                listing_data["is_on_sale"] = bool(listing[sale_key])
+                break
+        
+        # 가격이 있는 리스팅만 추가
+        if listing_data["price"] and listing_data["price"] > 0:
+            listings_info["listings"].append(listing_data)
+    
+    listings_info["has_data"] = len(listings_info["listings"]) > 0
+    listings_info["total_count"] = len(listings_info["listings"])
+    
+    return listings_info
+
+
+def calculate_price_stats(listings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    리스팅 목록에서 가격 통계 계산
+    """
+    if not listings:
+        return {
+            "lowest_price": None,
+            "highest_price": None,
+            "average_price": None,
+            "median_price": None,
+            "total_listings": 0,
+            "on_sale_count": 0
+        }
+    
+    prices = [l["price"] for l in listings if l["price"] and l["price"] > 0]
+    
+    if not prices:
+        return {
+            "lowest_price": None,
+            "highest_price": None,
+            "average_price": None,
+            "median_price": None,
+            "total_listings": len(listings),
+            "on_sale_count": sum(1 for l in listings if l.get("is_on_sale"))
+        }
+    
+    prices.sort()
+    
+    return {
+        "lowest_price": min(prices),
+        "highest_price": max(prices),
+        "average_price": sum(prices) / len(prices),
+        "median_price": prices[len(prices) // 2],
+        "total_listings": len(listings),
+        "on_sale_count": sum(1 for l in listings if l.get("is_on_sale"))
+    }
 
 
 # -----------------------------
 # 5) Streamlit UI
 # -----------------------------
-st.set_page_config(page_title="SNKRDUNK 포켓몬 카드 검색", layout="wide")
+st.set_page_config(page_title="SNKRDUNK 포켓몬 싱글 카드 검색", layout="wide")
 
-st.title("🃏 SNKRDUNK 포켓몬 카드 검색기")
-st.markdown("### 캐릭터명과 카드팩으로 포켓몬 카드를 검색하세요")
+st.title("🃏 SNKRDUNK 포켓몬 싱글 카드 검색기")
+st.markdown("### 포켓몬 TCG 싱글 카드를 검색하세요 (부스터 박스/팩 제외)")
 
 # 경고 메시지
-st.info("✨ **업데이트**: 이제 포켓몬 카드만 정확하게 필터링됩니다! (원피스 카드 제외)")
+st.info("✨ **개선사항**: 이제 싱글 카드만 정확하게 검색됩니다! (부스터 박스/팩 자동 제외)")
 
 # 사이드바
 with st.sidebar:
@@ -401,13 +469,13 @@ with st.sidebar:
     
     search_mode = st.radio(
         "검색 방법",
-        ["캐릭터/카드팩 검색", "Card ID 직접 입력"],
-        help="캐릭터명과 카드팩으로 검색하거나, 알고 있는 Card ID를 직접 입력"
+        ["캐릭터/세트 검색", "Card ID 직접 입력"],
+        help="캐릭터명으로 검색하거나, 알고 있는 Card ID를 직접 입력"
     )
     
     st.divider()
     
-    if search_mode == "캐릭터/카드팩 검색":
+    if search_mode == "캐릭터/세트 검색":
         st.subheader("📝 검색 정보 입력")
         
         character_name = st.text_input(
@@ -418,40 +486,25 @@ with st.sidebar:
         )
         
         set_name = st.text_input(
-            "📦 카드팩 이름 (선택)",
+            "📦 세트명 (선택)",
             value="",
-            placeholder="예: Scarlet Violet, 151",
-            help="특정 카드팩에서만 검색하려면 입력하세요"
+            placeholder="예: Scarlet Violet, 151, Crown Zenith",
+            help="특정 세트에서만 검색하려면 입력하세요"
         )
         
         card_number = st.text_input(
             "🔢 카드 번호 (선택)",
             value="",
-            placeholder="예: 025, 098",
+            placeholder="예: 025, 006",
             help="특정 번호의 카드만 찾으려면 입력하세요"
         )
         
         # 검색 조건 요약
-        st.info(f"🔍 검색 조건\n캐릭터: {character_name or '미지정'}\n카드팩: {set_name or '전체'}\n번호: {card_number or '전체'}")
+        st.info(f"🔍 검색 조건\n캐릭터: {character_name or '미지정'}\n세트: {set_name or '전체'}\n번호: {card_number or '전체'}")
         
         # 검색 예시
         with st.expander("💡 검색 예시"):
             st.markdown("""
-            **기본 검색:**
-            - 캐릭터명: `Pikachu`
-            - 카드팩: (비움)
-            - 번호: (비움)
-            
-            **세트 내 검색:**
-            - 캐릭터명: `Pikachu`
-            - 카드팩: `Scarlet Violet`
-            - 번호: (비움)
-            
-            **정확한 카드:**
-            - 캐릭터명: `Charizard`
-            - 카드팩: `151`
-            - 번호: `006`
-            
             **인기 캐릭터:**
             - Pikachu (피카츄)
             - Charizard (리자몽)
@@ -459,20 +512,22 @@ with st.sidebar:
             - Mewtwo (뮤츠)
             - Umbreon (블래키)
             - Gengar (팬텀)
+            - Gyarados (갸라도스)
             
-            **인기 카드팩:**
+            **인기 세트:**
             - Scarlet Violet
             - 151
             - Crown Zenith
             - Silver Tempest
             - Fusion Strike
+            - Brilliant Stars
             """)
     
     else:  # Card ID 직접 입력
         st.subheader("🆔 Card ID 입력")
         card_id = st.text_input(
             "Card ID",
-            value="135232",
+            value="",
             placeholder="예: 135232",
             help="SNKRDUNK 카드 페이지 URL에서 확인 가능"
         )
@@ -493,15 +548,15 @@ with st.sidebar:
 
 # 메인 컨텐츠
 if search_button:
-    if search_mode == "캐릭터/카드팩 검색":
+    if search_mode == "캐릭터/세트 검색":
         # 최소 하나는 입력했는지 확인
         if not character_name.strip() and not set_name.strip() and not card_number.strip():
-            st.error("❌ 캐릭터명, 카드팩 이름, 또는 카드 번호 중 최소 하나는 입력해주세요!")
+            st.error("❌ 캐릭터명, 세트명, 또는 카드 번호 중 최소 하나는 입력해주세요!")
             st.stop()
         
-        with st.spinner(f"🔎 포켓몬 카드 검색 중... 여러 방법을 시도하고 있어요!"):
+        with st.spinner(f"🔎 포켓몬 싱글 카드 검색 중..."):
             # 검색 API 호출
-            search_result = search_pokemon_cards(
+            search_result = search_pokemon_single_cards(
                 character_name=character_name,
                 set_name=set_name,
                 card_number=card_number,
@@ -509,7 +564,7 @@ if search_button:
             )
             
             if not search_result.get("success"):
-                st.error("❌ 검색 실패 - 포켓몬 카드를 찾을 수 없습니다")
+                st.error("❌ 검색 실패 - 포켓몬 싱글 카드를 찾을 수 없습니다")
                 
                 st.markdown("""
                 **다음을 시도해보세요:**
@@ -522,35 +577,32 @@ if search_button:
                 if show_debug and "errors" in search_result:
                     with st.expander("🔧 디버그 정보"):
                         st.json(search_result["errors"])
-                        st.caption(f"총 {search_result.get('total_attempts', 0)}번 시도했습니다")
                 st.stop()
             
             # 검색 성공!
-            st.success(f"✅ 검색 성공! ({search_result.get('items_count', 0)}개 포켓몬 카드 발견)")
+            st.success(f"✅ 검색 성공! ({search_result.get('items_count', 0)}개 싱글 카드 발견)")
             
             if search_result.get('original_count', 0) > search_result.get('items_count', 0):
                 filtered_out = search_result['original_count'] - search_result['items_count']
-                st.caption(f"🚫 {filtered_out}개의 다른 카드(원피스 등)는 자동으로 제외되었습니다")
+                st.caption(f"🚫 {filtered_out}개의 박스/팩 상품이 자동으로 제외되었습니다")
             
             if show_debug:
                 st.caption(f"엔드포인트: {search_result.get('endpoint')}")
                 st.caption(f"시도 #{search_result.get('attempt_number')} 성공")
-                with st.expander("사용된 파라미터"):
-                    st.json(search_result.get('params'))
             
-            # 필터링된 포켓몬 카드 목록
+            # 필터링된 싱글 카드 목록
             cards = search_result.get("filtered_items", [])
             
             if not cards:
-                st.warning("⚠️ 포켓몬 카드를 찾을 수 없습니다")
+                st.warning("⚠️ 싱글 카드를 찾을 수 없습니다")
                 st.stop()
             
-            st.info(f"📊 총 {len(cards)}개의 포켓몬 카드를 찾았습니다")
+            st.info(f"📊 총 {len(cards)}개의 싱글 카드를 찾았습니다")
             
             # 카드 목록 표시
-            st.subheader("📋 검색 결과 (포켓몬 카드만)")
+            st.subheader("📋 검색 결과 (싱글 카드만)")
             
-            for idx, card in enumerate(cards[:15], 1):  # 최대 15개 표시
+            for idx, card in enumerate(cards[:15], 1):
                 with st.expander(f"🃏 #{idx} - {card.get('name', card.get('title', '이름 없음'))}", expanded=(idx <= 3)):
                     col1, col2 = st.columns([1, 2])
                     
@@ -576,15 +628,16 @@ if search_button:
                         # 추가 정보
                         if 'rarity' in card:
                             st.markdown(f"**레어도:** {card['rarity']}")
-                        if 'type' in card:
-                            st.markdown(f"**타입:** {card['type']}")
+                        if 'condition' in card or 'grade' in card:
+                            condition = card.get('condition') or card.get('grade')
+                            st.markdown(f"**컨디션:** {condition}")
                         
                         # Card ID 추출
                         extracted_id = extract_card_id(card)
                         if extracted_id:
                             st.markdown(f"**Card ID:** `{extracted_id}`")
                             
-                            if st.button(f"💰 가격 정보 보기", key=f"detail_{idx}"):
+                            if st.button(f"💰 매물 정보 보기", key=f"detail_{idx}"):
                                 st.session_state['selected_card_id'] = extracted_id
                                 st.rerun()
                         else:
@@ -596,11 +649,6 @@ if search_button:
             
             if len(cards) > 15:
                 st.info(f"💡 {len(cards) - 15}개의 추가 결과가 더 있습니다")
-            
-            # 전체 응답 JSON
-            if show_raw_json:
-                with st.expander("📄 전체 응답 JSON"):
-                    st.json(search_result["data"])
     
     else:  # Card ID 직접 입력
         if not card_id.strip():
@@ -625,40 +673,61 @@ if 'selected_card_id' in st.session_state:
     st.caption(f"Card ID: {selected_id}")
     
     try:
-        tab1, tab2, tab3 = st.tabs(["💰 가격 정보", "🔗 관련 카드", "📝 카드 상세"])
+        tab1, tab2, tab3 = st.tabs(["💰 매물 정보", "🔗 관련 카드", "📝 카드 상세"])
         
         with tab1:
-            with st.spinner("가격 정보 로딩 중..."):
+            with st.spinner("매물 정보 로딩 중..."):
                 used_data = get_used_listings(selected_id)
-                price_info = extract_price_info(used_data)
+                listings_info = extract_listings_info(used_data)
                 
-                if price_info["all_prices"]:
+                if listings_info["has_data"]:
+                    st.success(f"✅ {listings_info['total_count']}개의 매물을 찾았습니다")
+                    
                     # 가격 통계
+                    stats = calculate_price_stats(listings_info["listings"])
+                    
                     col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("💵 최저가", f"¥{price_info['lowest_price']:,.0f}")
-                    col2.metric("💵 최고가", f"¥{price_info['highest_price']:,.0f}")
-                    col3.metric("💵 평균가", f"¥{price_info['average_price']:,.0f}")
-                    col4.metric("📊 리스팅", f"{len(price_info['all_prices'])}개")
+                    col1.metric("💵 최저가", f"¥{stats['lowest_price']:,.0f}" if stats['lowest_price'] else "N/A")
+                    col2.metric("💵 최고가", f"¥{stats['highest_price']:,.0f}" if stats['highest_price'] else "N/A")
+                    col3.metric("💵 평균가", f"¥{stats['average_price']:,.0f}" if stats['average_price'] else "N/A")
+                    col4.metric("📊 총 매물", f"{stats['total_listings']}개")
                     
                     # 가격 분포 차트
-                    if len(price_info["all_prices"]) > 1:
-                        st.subheader("가격 분포")
-                        st.bar_chart(price_info["all_prices"])
+                    if stats['total_listings'] > 1:
+                        st.subheader("📈 가격 분포")
+                        prices = [l["price"] for l in listings_info["listings"] if l["price"]]
+                        st.bar_chart(prices)
                     
-                    # 가격 분석
-                    st.subheader("💡 가격 분석")
-                    price_range = price_info['highest_price'] - price_info['lowest_price']
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("가격 차이", f"¥{price_range:,.0f}")
-                    with col2:
-                        variance = (price_range / price_info['average_price'] * 100) if price_info['average_price'] > 0 else 0
-                        st.metric("가격 변동성", f"{variance:.1f}%")
+                    st.divider()
+                    
+                    # 매물 목록
+                    st.subheader("🏷️ 매물 목록")
+                    
+                    for idx, listing in enumerate(listings_info["listings"][:20], 1):
+                        with st.expander(
+                            f"매물 #{idx} - ¥{listing['price']:,.0f}" + 
+                            (f" ({listing['condition']})" if listing['condition'] else "") +
+                            (" 🟢 판매중" if listing.get('is_on_sale') else "")
+                        ):
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.markdown(f"**가격:** ¥{listing['price']:,.0f}")
+                                if listing['condition']:
+                                    st.markdown(f"**컨디션:** {listing['condition']}")
+                            with col2:
+                                if listing['seller']:
+                                    st.markdown(f"**판매자:** {listing['seller']}")
+                                if listing['created_at']:
+                                    st.markdown(f"**등록일:** {listing['created_at'][:10]}")
+                    
+                    if listings_info['total_count'] > 20:
+                        st.info(f"💡 {listings_info['total_count'] - 20}개의 추가 매물이 더 있습니다")
+                    
                 else:
-                    st.info("💡 현재 판매 중인 리스팅이 없습니다")
+                    st.info("💡 현재 등록된 매물이 없습니다")
                 
                 if show_raw_json:
-                    with st.expander("📄 Raw JSON - Used Listings"):
+                    with st.expander("📄 Raw JSON - Listings"):
                         st.json(used_data)
         
         with tab2:
@@ -666,11 +735,11 @@ if 'selected_card_id' in st.session_state:
                 related_data = get_related_single_cards(selected_id)
                 related_cards = extract_cards_from_response(related_data)
                 
-                # 관련 카드도 포켓몬만 필터링
-                related_cards = filter_pokemon_only(related_cards)
+                # 관련 카드도 싱글 카드만 필터링
+                related_cards = filter_single_cards_only(related_cards)
                 
                 if related_cards:
-                    st.subheader(f"🔗 관련 포켓몬 카드 ({len(related_cards)}개)")
+                    st.subheader(f"🔗 관련 싱글 카드 ({len(related_cards)}개)")
                     
                     # 그리드 형식
                     cols = st.columns(3)
@@ -688,7 +757,7 @@ if 'selected_card_id' in st.session_state:
                                     st.session_state['selected_card_id'] = related_id
                                     st.rerun()
                 else:
-                    st.info("💡 관련 포켓몬 카드가 없습니다")
+                    st.info("💡 관련 싱글 카드가 없습니다")
                 
                 if show_raw_json:
                     with st.expander("📄 Raw JSON - Related Cards"):
@@ -731,7 +800,7 @@ st.divider()
 st.markdown("""
 <div style='text-align: center; color: gray; padding: 20px;'>
     <p>💡 <b>Tip:</b> 캐릭터명만 입력해도 검색됩니다!</p>
-    <p>🔧 여러 API 조합을 자동으로 시도하여 최적의 결과를 찾습니다</p>
-    <p>✨ 포켓몬 카드만 정확하게 필터링됩니다 (원피스 카드 자동 제외)</p>
+    <p>🃏 싱글 카드만 정확하게 검색됩니다 (부스터 박스/팩 자동 제외)</p>
+    <p>💰 실제 매물 정보와 가격을 확인할 수 있습니다</p>
 </div>
 """, unsafe_allow_html=True)
