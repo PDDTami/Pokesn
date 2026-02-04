@@ -15,14 +15,6 @@ st.title("🎴 포켓몬 카드 가격 검색")
 st.markdown("Pokemon TCG API를 통해 포켓몬 카드의 시장 가격과 정보를 확인하세요!")
 
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("""
-### 📊 데이터 출처
-[Pokemon TCG API](https://pokemontcg.io/)
-
-실시간 시장 가격 데이터 제공
-""")
-
 def search_pokemon_cards(query):
     """Pokemon TCG API를 사용하여 카드 검색"""
     try:
