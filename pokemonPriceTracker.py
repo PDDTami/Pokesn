@@ -1,14 +1,14 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
 import pandas as pd
 import re
 from datetime import datetime
 import time
-
-import sys
-import subprocess
-subprocess.check_call([sys.executable, "-m", "pip", "install", "beautifulsoup4"])
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # 페이지 설정
 st.set_page_config(
@@ -36,6 +36,7 @@ st.sidebar.markdown("""
 ### 💡 팁
 - 영어 이름으로 검색하세요
 - 카드 번호는 선택사항입니다
+- 첫 검색은 시간이 걸릴 수 있습니다
 """)
 
 st.sidebar.markdown("---")
@@ -46,85 +47,116 @@ st.sidebar.markdown("""
 실시간 시장 데이터를 제공합니다.
 """)
 
-# 헤더 설정 (403 에러 회피)
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.5',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Cache-Control': 'max-age=0',
-}
+@st.cache_resource
+def get_driver():
+    """Selenium WebDriver 초기화 (캐싱)"""
+    options = Options()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1920,1080')
+    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    
+    driver = webdriver.Chrome(options=options)
+    return driver
 
-def search_snkrdunk_pokemon(pokemon_name, card_number=None):
-    """SNKRDUNK에서 포켓몬 카드 검색"""
+def search_snkrdunk_pokemon_selenium(pokemon_name, card_number=None):
+    """Selenium을 사용하여 SNKRDUNK에서 포켓몬 카드 검색"""
     try:
+        driver = get_driver()
+        
         # 검색어 생성
         search_query = pokemon_name
         if card_number:
             search_query = f"{pokemon_name} {card_number}"
         
-        # SNKRDUNK 검색 URL (예상)
+        # SNKRDUNK 검색 URL
         search_url = f"https://snkrdunk.com/en/search?q={search_query.replace(' ', '+')}"
         
-        st.info(f"검색 URL: {search_url}")
+        # 페이지 로드
+        driver.get(search_url)
         
-        # 세션 사용
-        session = requests.Session()
-        session.headers.update(HEADERS)
+        # 페이지 로딩 대기
+        time.sleep(3)
         
-        # 요청
-        response = session.get(search_url, timeout=10)
+        # 검색 결과 대기
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='product'], div[class*='item'], article"))
+            )
+        except TimeoutException:
+            return None, "검색 결과를 찾을 수 없습니다."
         
-        if response.status_code == 403:
-            return None, "접근이 차단되었습니다. SNKRDUNK는 자동화된 접근을 제한하고 있습니다."
+        # 페이지 소스 가져오기
+        page_source = driver.page_source
         
-        if response.status_code != 200:
-            return None, f"HTTP 에러: {response.status_code}"
+        # BeautifulSoup으로 파싱
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(page_source, 'html.parser')
         
-        # HTML 파싱
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # 검색 결과 추출 (실제 HTML 구조에 따라 조정 필요)
         cards = []
         
-        # 여기에 실제 SNKRDUNK HTML 구조에 맞는 파싱 코드 추가
-        # 예시 구조 (실제와 다를 수 있음)
-        card_items = soup.find_all('div', class_='product-item')
+        # 다양한 선택자 시도 (SNKRDUNK의 실제 구조에 맞게)
+        possible_selectors = [
+            {'tag': 'div', 'class': 'product-item'},
+            {'tag': 'div', 'class': 'ProductCard'},
+            {'tag': 'article', 'class': None},
+            {'tag': 'div', 'attrs': {'data-testid': 'product-card'}},
+            {'tag': 'a', 'class': None},  # 링크 기반 검색
+        ]
         
-        for item in card_items:
+        card_elements = []
+        for selector in possible_selectors:
+            if selector['class']:
+                elements = soup.find_all(selector['tag'], class_=re.compile(selector['class'], re.I))
+            elif selector.get('attrs'):
+                elements = soup.find_all(selector['tag'], attrs=selector['attrs'])
+            else:
+                elements = soup.find_all(selector['tag'])
+            
+            if elements:
+                card_elements = elements[:20]  # 최대 20개
+                break
+        
+        # 카드 정보 추출
+        for item in card_elements:
             try:
-                # 카드 정보 추출
                 card_data = {
                     'name': None,
                     'price': None,
                     'image': None,
                     'url': None,
-                    'condition': None
                 }
                 
-                # 제목 추출
-                title_elem = item.find('h3') or item.find('a', class_='product-title')
-                if title_elem:
-                    card_data['name'] = title_elem.get_text(strip=True)
+                # 제목/이름 추출
+                title_selectors = ['h3', 'h2', 'p', 'span']
+                for tag in title_selectors:
+                    title_elem = item.find(tag)
+                    if title_elem and len(title_elem.get_text(strip=True)) > 3:
+                        card_data['name'] = title_elem.get_text(strip=True)
+                        break
                 
                 # 가격 추출
-                price_elem = item.find('span', class_='price') or item.find('div', class_='price')
-                if price_elem:
-                    price_text = price_elem.get_text(strip=True)
-                    # 숫자만 추출
-                    price_match = re.search(r'[\d,]+', price_text)
+                price_patterns = [r'¥\s*[\d,]+', r'\$\s*[\d,]+', r'[\d,]+\s*円']
+                text_content = item.get_text()
+                for pattern in price_patterns:
+                    price_match = re.search(pattern, text_content)
                     if price_match:
-                        card_data['price'] = price_match.group().replace(',', '')
+                        price_text = price_match.group()
+                        # 숫자만 추출
+                        numbers = re.sub(r'[^\d]', '', price_text)
+                        if numbers:
+                            card_data['price'] = numbers
+                            break
                 
                 # 이미지 URL 추출
                 img_elem = item.find('img')
                 if img_elem:
                     card_data['image'] = img_elem.get('src') or img_elem.get('data-src')
+                    # 상대 경로를 절대 경로로 변환
+                    if card_data['image'] and not card_data['image'].startswith('http'):
+                        card_data['image'] = f"https://snkrdunk.com{card_data['image']}"
                 
                 # 상품 URL 추출
                 link_elem = item.find('a')
@@ -132,17 +164,20 @@ def search_snkrdunk_pokemon(pokemon_name, card_number=None):
                     card_data['url'] = link_elem.get('href')
                     if card_data['url'] and not card_data['url'].startswith('http'):
                         card_data['url'] = f"https://snkrdunk.com{card_data['url']}"
+                elif item.name == 'a':
+                    card_data['url'] = item.get('href')
+                    if card_data['url'] and not card_data['url'].startswith('http'):
+                        card_data['url'] = f"https://snkrdunk.com{card_data['url']}"
                 
-                cards.append(card_data)
+                # 유효한 데이터가 있는 경우만 추가
+                if card_data['name'] or card_data['price']:
+                    cards.append(card_data)
+                    
             except Exception as e:
                 continue
         
         return cards, None
         
-    except requests.exceptions.Timeout:
-        return None, "요청 시간 초과"
-    except requests.exceptions.ConnectionError:
-        return None, "연결 오류"
     except Exception as e:
         return None, f"오류 발생: {str(e)}"
 
@@ -151,7 +186,10 @@ def calculate_average_price(prices):
     if not prices:
         return None
     
-    valid_prices = [float(p) for p in prices if p and p.replace(',', '').replace('.', '').isdigit()]
+    valid_prices = []
+    for p in prices:
+        if p and str(p).replace(',', '').replace('.', '').isdigit():
+            valid_prices.append(float(str(p).replace(',', '')))
     
     if not valid_prices:
         return None
@@ -179,43 +217,33 @@ with col3:
     st.markdown("<br>", unsafe_allow_html=True)
     search_button = st.button("검색", type="primary", use_container_width=True)
 
-# 중요 공지
-st.warning("""
-⚠️ **중요 공지:**
-
-SNKRDUNK는 자동화된 웹 스크래핑을 방지하기 위해 보안 조치를 사용합니다. 
-이 앱은 교육 목적의 예시이며, 실제로는 다음 방법들을 권장합니다:
-
-1. **공식 API 사용** (가능한 경우)
-2. **Selenium + 크롬 드라이버** 사용 (브라우저 자동화)
-3. **수동 검색** 후 데이터 입력
-4. **SNKRDUNK 앱** 직접 사용
-
-아래는 대안 솔루션입니다 👇
+# 안내 메시지
+st.info("""
+💡 **참고사항:**
+- 첫 검색은 브라우저를 초기화하므로 10-15초 정도 걸릴 수 있습니다
+- 이후 검색은 더 빨라집니다
+- Selenium을 사용하여 실제 브라우저처럼 데이터를 가져옵니다
 """)
 
 # 검색 실행
 if search_button and pokemon_name:
-    with st.spinner("카드를 검색하는 중..."):
-        cards, error = search_snkrdunk_pokemon(pokemon_name, card_number)
+    with st.spinner("🔍 카드를 검색하는 중... (최대 15초 소요)"):
+        cards, error = search_snkrdunk_pokemon_selenium(pokemon_name, card_number)
         
         if error:
             st.error(f"⚠️ {error}")
             
             # 대안 제시
-            st.info("""
-            ### 🔄 대안 방법
+            st.info(f"""
+            ### 🔄 다른 방법
             
-            **1. SNKRDUNK 직접 방문:**
-            - [SNKRDUNK Pokemon Cards](https://snkrdunk.com/en/brands/pokemon/trading-cards)
+            **직접 확인하기:**
+            - [SNKRDUNK에서 직접 검색하기](https://snkrdunk.com/en/search?q={pokemon_name.replace(' ', '+')})
             
-            **2. Selenium 사용:**
-            - 브라우저 자동화 도구 사용
-            - 더 안정적인 스크래핑 가능
-            
-            **3. 수동 데이터 입력:**
-            - SNKRDUNK에서 가격을 확인한 후
-            - 이 앱에서 수동으로 입력하여 평균 계산
+            **문제 해결:**
+            - 다른 포켓몬 이름으로 시도해보세요
+            - 영어 철자를 확인해보세요
+            - 잠시 후 다시 시도해보세요
             """)
             
         elif not cards or len(cards) == 0:
@@ -226,8 +254,9 @@ if search_button and pokemon_name:
             st.success(f"✅ {len(cards)}개의 카드를 찾았습니다!")
             
             # 카드 목록 표시
-            st.markdown("### 검색 결과")
+            st.markdown("### 🎴 검색 결과")
             
+            # 3열 그리드로 표시
             for i in range(0, len(cards), 3):
                 cols = st.columns(3)
                 
@@ -238,23 +267,44 @@ if search_button and pokemon_name:
                         with col:
                             # 카드 이미지
                             if card.get('image'):
-                                st.image(card['image'], use_container_width=True)
+                                try:
+                                    st.image(card['image'], use_container_width=True)
+                                except:
+                                    st.image("https://via.placeholder.com/300x420?text=No+Image", use_container_width=True)
                             else:
                                 st.image("https://via.placeholder.com/300x420?text=No+Image", use_container_width=True)
                             
                             # 카드 정보
                             if card.get('name'):
-                                st.markdown(f"**{card['name']}**")
+                                st.markdown(f"**{card['name'][:50]}**")
                             
                             # 가격
                             if card.get('price'):
-                                st.metric("가격", f"¥{card['price']}")
+                                st.metric("가격", f"¥{int(card['price']):,}")
                             
                             # 링크
                             if card.get('url'):
                                 st.link_button("SNKRDUNK에서 보기", card['url'], use_container_width=True)
                             
                             st.markdown("---")
+            
+            # 가격 통계
+            prices = [card.get('price') for card in cards if card.get('price')]
+            if prices:
+                st.markdown("### 📊 가격 통계")
+                
+                avg_price = calculate_average_price(prices)
+                valid_prices = [float(p) for p in prices if str(p).replace(',', '').isdigit()]
+                
+                if valid_prices:
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("평균 가격", f"¥{int(avg_price):,}")
+                    with col2:
+                        st.metric("최저 가격", f"¥{int(min(valid_prices)):,}")
+                    with col3:
+                        st.metric("최고 가격", f"¥{int(max(valid_prices)):,}")
 
 elif search_button and not pokemon_name:
     st.warning("포켓몬 이름을 입력해주세요!")
@@ -322,6 +372,6 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: gray;'>
     <p>데이터 출처: <a href='https://snkrdunk.com/en' target='_blank'>SNKRDUNK.com</a></p>
-    <p>⚠️ 이 도구는 교육 목적입니다. 실제 거래는 SNKRDUNK 사이트에서 진행하세요.</p>
+    <p>🤖 Selenium 기반 자동 검색 | ⚠️ 실제 거래는 SNKRDUNK 사이트에서 진행하세요.</p>
 </div>
 """, unsafe_allow_html=True)
